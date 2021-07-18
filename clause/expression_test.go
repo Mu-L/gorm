@@ -61,6 +61,11 @@ func TestNamedExpr(t *testing.T) {
 		Result:       "name1 = ? AND name2 = ?",
 		ExpectedVars: []interface{}{"jinzhu", "jinzhu"},
 	}, {
+		SQL:          "name1 = @name AND name2 = @@name",
+		Vars:         []interface{}{map[string]interface{}{"name": "jinzhu"}},
+		Result:       "name1 = ? AND name2 = @@name",
+		ExpectedVars: []interface{}{"jinzhu"},
+	}, {
 		SQL:          "name1 = @name1 AND name2 = @name2 AND name3 = @name1",
 		Vars:         []interface{}{sql.Named("name1", "jinzhu"), sql.Named("name2", "jinzhu2")},
 		Result:       "name1 = ? AND name2 = ? AND name3 = ?",
@@ -73,13 +78,13 @@ func TestNamedExpr(t *testing.T) {
 	}, {
 		SQL:          "@@test AND name1 = @name1 AND name2 = @name2 AND name3 = @name1 @notexist",
 		Vars:         []interface{}{sql.Named("name1", "jinzhu"), sql.Named("name2", "jinzhu2")},
-		Result:       "@@test AND name1 = ? AND name2 = ? AND name3 = ? ?",
-		ExpectedVars: []interface{}{"jinzhu", "jinzhu2", "jinzhu", nil},
+		Result:       "@@test AND name1 = ? AND name2 = ? AND name3 = ? @notexist",
+		ExpectedVars: []interface{}{"jinzhu", "jinzhu2", "jinzhu"},
 	}, {
-		SQL:          "@@test AND name1 = @Name1 AND name2 = @Name2 AND name3 = @Name1 @Notexist",
+		SQL:          "@@test AND name1 = @Name1 AND name2 = @Name2 AND name3 = @Name1 @notexist",
 		Vars:         []interface{}{NamedArgument{Name1: "jinzhu", Base: Base{Name2: "jinzhu2"}}},
-		Result:       "@@test AND name1 = ? AND name2 = ? AND name3 = ? ?",
-		ExpectedVars: []interface{}{"jinzhu", "jinzhu2", "jinzhu", nil},
+		Result:       "@@test AND name1 = ? AND name2 = ? AND name3 = ? @notexist",
+		ExpectedVars: []interface{}{"jinzhu", "jinzhu2", "jinzhu"},
 	}, {
 		SQL:    "create table ? (? ?, ? ?)",
 		Vars:   []interface{}{},
@@ -105,13 +110,15 @@ func TestNamedExpr(t *testing.T) {
 func TestExpression(t *testing.T) {
 	column := "column-name"
 	results := []struct {
-		Expressions []clause.Expression
-		Result      string
+		Expressions  []clause.Expression
+		ExpectedVars []interface{}
+		Result       string
 	}{{
 		Expressions: []clause.Expression{
 			clause.Eq{Column: column, Value: "column-value"},
 		},
-		Result: "`column-name` = ?",
+		ExpectedVars: []interface{}{"column-value"},
+		Result:       "`column-name` = ?",
 	}, {
 		Expressions: []clause.Expression{
 			clause.Eq{Column: column, Value: nil},
@@ -126,7 +133,8 @@ func TestExpression(t *testing.T) {
 		Expressions: []clause.Expression{
 			clause.Neq{Column: column, Value: "column-value"},
 		},
-		Result: "`column-name` <> ?",
+		ExpectedVars: []interface{}{"column-value"},
+		Result:       "`column-name` <> ?",
 	}, {
 		Expressions: []clause.Expression{
 			clause.Neq{Column: column, Value: nil},
@@ -136,6 +144,18 @@ func TestExpression(t *testing.T) {
 			clause.Neq{Column: column, Value: (interface{})(nil)},
 		},
 		Result: "`column-name` IS NOT NULL",
+	}, {
+		Expressions: []clause.Expression{
+			clause.Eq{Column: column, Value: []string{"a", "b"}},
+		},
+		ExpectedVars: []interface{}{"a", "b"},
+		Result:       "`column-name` IN (?,?)",
+	}, {
+		Expressions: []clause.Expression{
+			clause.Neq{Column: column, Value: []string{"a", "b"}},
+		},
+		ExpectedVars: []interface{}{"a", "b"},
+		Result:       "`column-name` NOT IN (?,?)",
 	}}
 
 	for idx, result := range results {
@@ -146,6 +166,10 @@ func TestExpression(t *testing.T) {
 				expression.Build(stmt)
 				if stmt.SQL.String() != result.Result {
 					t.Errorf("generated SQL is not equal, expects %v, but got %v", result.Result, stmt.SQL.String())
+				}
+
+				if !reflect.DeepEqual(result.ExpectedVars, stmt.Vars) {
+					t.Errorf("generated vars is not equal, expects %v, but got %v", result.ExpectedVars, stmt.Vars)
 				}
 			})
 		}

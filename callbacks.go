@@ -32,6 +32,7 @@ type callbacks struct {
 
 type processor struct {
 	db        *DB
+	Clauses   []string
 	fns       []func(*DB)
 	callbacks []*callback
 }
@@ -71,19 +72,25 @@ func (cs *callbacks) Raw() *processor {
 	return cs.processors["raw"]
 }
 
-func (p *processor) Execute(db *DB) {
-	var (
-		curTime = time.Now()
-		stmt    = db.Statement
-	)
-
+func (p *processor) Execute(db *DB) *DB {
 	// call scopes
-	for len(stmt.scopes) > 0 {
-		scopes := stmt.scopes
-		stmt.scopes = nil
+	for len(db.Statement.scopes) > 0 {
+		scopes := db.Statement.scopes
+		db.Statement.scopes = nil
 		for _, scope := range scopes {
 			db = scope(db)
 		}
+	}
+
+	var (
+		curTime           = time.Now()
+		stmt              = db.Statement
+		resetBuildClauses bool
+	)
+
+	if len(stmt.BuildClauses) == 0 {
+		stmt.BuildClauses = p.Clauses
+		resetBuildClauses = true
 	}
 
 	// assign model values
@@ -110,7 +117,6 @@ func (p *processor) Execute(db *DB) {
 		for stmt.ReflectValue.Kind() == reflect.Ptr {
 			if stmt.ReflectValue.IsNil() && stmt.ReflectValue.CanAddr() {
 				stmt.ReflectValue.Set(reflect.New(stmt.ReflectValue.Type().Elem()))
-				break
 			}
 
 			stmt.ReflectValue = stmt.ReflectValue.Elem()
@@ -132,6 +138,12 @@ func (p *processor) Execute(db *DB) {
 		stmt.SQL.Reset()
 		stmt.Vars = nil
 	}
+
+	if resetBuildClauses {
+		stmt.BuildClauses = nil
+	}
+
+	return db
 }
 
 func (p *processor) Get(name string) func(*DB) {
@@ -200,7 +212,7 @@ func (c *callback) Register(name string, fn func(*DB)) error {
 }
 
 func (c *callback) Remove(name string) error {
-	c.processor.db.Logger.Warn(context.Background(), "removing callback `%v` from %v\n", name, utils.FileWithLineNum())
+	c.processor.db.Logger.Warn(context.Background(), "removing callback `%s` from %s\n", name, utils.FileWithLineNum())
 	c.name = name
 	c.remove = true
 	c.processor.callbacks = append(c.processor.callbacks, c)
@@ -208,7 +220,7 @@ func (c *callback) Remove(name string) error {
 }
 
 func (c *callback) Replace(name string, fn func(*DB)) error {
-	c.processor.db.Logger.Info(context.Background(), "replacing callback `%v` from %v\n", name, utils.FileWithLineNum())
+	c.processor.db.Logger.Info(context.Background(), "replacing callback `%s` from %s\n", name, utils.FileWithLineNum())
 	c.name = name
 	c.handler = fn
 	c.replace = true
@@ -238,7 +250,7 @@ func sortCallbacks(cs []*callback) (fns []func(*DB), err error) {
 	for _, c := range cs {
 		// show warning message the callback name already exists
 		if idx := getRIndex(names, c.name); idx > -1 && !c.replace && !c.remove && !cs[idx].remove {
-			c.processor.db.Logger.Warn(context.Background(), "duplicated callback `%v` from %v\n", c.name, utils.FileWithLineNum())
+			c.processor.db.Logger.Warn(context.Background(), "duplicated callback `%s` from %s\n", c.name, utils.FileWithLineNum())
 		}
 		names = append(names, c.name)
 	}
@@ -254,7 +266,7 @@ func sortCallbacks(cs []*callback) (fns []func(*DB), err error) {
 					// if before callback already sorted, append current callback just after it
 					sorted = append(sorted[:sortedIdx], append([]string{c.name}, sorted[sortedIdx:]...)...)
 				} else if curIdx > sortedIdx {
-					return fmt.Errorf("conflicting callback %v with before %v", c.name, c.before)
+					return fmt.Errorf("conflicting callback %s with before %s", c.name, c.before)
 				}
 			} else if idx := getRIndex(names, c.before); idx != -1 {
 				// if before callback exists
@@ -272,7 +284,7 @@ func sortCallbacks(cs []*callback) (fns []func(*DB), err error) {
 					// if after callback sorted, append current callback to last
 					sorted = append(sorted, c.name)
 				} else if curIdx < sortedIdx {
-					return fmt.Errorf("conflicting callback %v with before %v", c.name, c.after)
+					return fmt.Errorf("conflicting callback %s with before %s", c.name, c.after)
 				}
 			} else if idx := getRIndex(names, c.after); idx != -1 {
 				// if after callback exists but haven't sorted
